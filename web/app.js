@@ -451,6 +451,7 @@
     if (s.server_name && s.enabled) actions.push(h('a', { class: 'btn sm', href: scheme + s.server_name + '/', target: '_blank', rel: 'noopener noreferrer' }, icon('external'), 'Buka'));
     if (s.document_root) actions.push(btn('File', { icon: 'folder', class: 'sm', onclick: () => { location.hash = '#/files?' + q({ path: s.document_root }); } }));
     if (s.enabled && s.server_name) actions.push(btn(s.cert ? 'Perbarui SSL' : 'Pasang SSL', { icon: 'lock', class: 'sm' + (s.cert ? '' : ' accent'), onclick: () => sslModal(s, reload) }));
+    if (s.server_name) actions.push(btn('Alias', { icon: 'link', class: 'sm', onclick: () => aliasModal(s, reload) }));
     actions.push(btn('Config', { icon: 'edit', class: 'sm', onclick: () => configEditor(s.name, reload) }));
     if (s.ssl_conf) actions.push(btn('Config SSL', { icon: 'edit', class: 'sm', onclick: () => configEditor(s.ssl_conf, reload) }));
     actions.push(btn(s.enabled ? 'Nonaktifkan' : 'Aktifkan', {
@@ -586,6 +587,39 @@
       }
       put(dnsBox, h('div', { class: 'muted small' }, 'IP di interface server: ' + (ips.join(', ') || '-') + '. Jika server di belakang NAT/Cloudflare proxy, "beda" bisa normal.'));
     }).catch((e) => { fill(dnsBox, h('div', { class: 'alert err' }, e.message)); });
+  }
+
+  function aliasModal(s, reload) {
+    const me = state.me;
+    const aliases = h('textarea', { rows: 3, spellcheck: false, placeholder: 'www.' + s.server_name }, s.aliases.join('\n'));
+    const canSSL = s.enabled;
+    const ssl = h('input', { type: 'checkbox', checked: canSSL && !!s.cert, disabled: !canSSL });
+    const email = h('input', { type: 'email', value: me.certbot_email || '', placeholder: 'email@domain.com' });
+    const redirect = h('input', { type: 'checkbox', checked: true });
+    const sslBox = h('div', { class: 'stack' + (ssl.checked ? '' : ' hidden') },
+      h('label', { class: 'field' }, h('span', null, 'Email'), email, h('small', null, 'Opsional, untuk peringatan kedaluwarsa dari Let\'s Encrypt')),
+      h('label', { class: 'check' }, redirect, h('span', null, 'Redirect otomatis HTTP → HTTPS')));
+    ssl.addEventListener('change', () => sslBox.classList.toggle('hidden', !ssl.checked));
+    const err = h('div', { class: 'alert err hidden' });
+    const save = btn('Simpan', { icon: 'check', class: 'accent' });
+    const m = modal({
+      title: 'Alias — ' + s.server_name,
+      body: h('div', { class: 'stack' },
+        err,
+        h('label', { class: 'field' }, h('span', null, 'Alias (ServerAlias)'), aliases,
+          h('small', null, 'Satu per baris atau pisah koma. Kosongkan untuk menghapus semua alias. Pastikan DNS alias sudah mengarah ke server ini.')),
+        h('label', { class: 'check' }, ssl, h('span', null,
+          h('strong', null, s.cert ? 'Perbarui sertifikat SSL' : 'Pasang SSL'), h('br'),
+          h('span', { class: 'muted small' }, canSSL ? 'certbot dijalankan ulang untuk domain utama + semua alias' : 'Aktifkan situs dulu untuk memasang SSL'))),
+        sslBox),
+      footer: [btn('Batal', { onclick: () => m.tryClose() }), save],
+    });
+    save.addEventListener('click', () => {
+      const list = aliases.value.split(/[\s,]+/).map((x) => x.trim().toLowerCase()).filter(Boolean);
+      const body = { aliases: list, ssl: ssl.checked, email: email.value.trim(), redirect: redirect.checked };
+      m.close();
+      opModal('Alias — ' + s.server_name, () => api('PUT', '/api/sites/' + encodeURIComponent(s.name) + '/aliases', body), { onDone: reload });
+    });
   }
 
   async function configEditor(name, reload) {

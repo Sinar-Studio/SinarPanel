@@ -49,6 +49,52 @@ func TestValidProxyURL(t *testing.T) {
 	}
 }
 
+func TestSetServerAlias(t *testing.T) {
+	conf := "# Managed by SinarPanel\n<VirtualHost *:80>\n    ServerAlias old.example.com\n    ServerName Blog.example.com\n    ServerAlias www.blog.example.com x.example.com\n    DocumentRoot /var/www/blog\n</VirtualHost>\n" +
+		"<VirtualHost *:80>\n\tServerName other.example.com\n\tServerAlias www.other.example.com\n</VirtualHost>\n"
+	out, ok := setServerAlias(conf, "blog.example.com", []string{"www.blog.example.com", "m.blog.example.com"})
+	if !ok {
+		t.Fatal("blok tidak ditemukan")
+	}
+	want := "# Managed by SinarPanel\n<VirtualHost *:80>\n    ServerName Blog.example.com\n    ServerAlias www.blog.example.com m.blog.example.com\n    DocumentRoot /var/www/blog\n</VirtualHost>\n" +
+		"<VirtualHost *:80>\n\tServerName other.example.com\n\tServerAlias www.other.example.com\n</VirtualHost>\n"
+	if out != want {
+		t.Fatalf("hasil salah:\n%s", out)
+	}
+	var s SiteInfo
+	parseVhost(out, &s)
+	if len(s.Aliases) != 3 || s.Aliases[0] != "www.blog.example.com" || s.Aliases[1] != "m.blog.example.com" {
+		t.Fatalf("alias salah: %v", s.Aliases)
+	}
+
+	// Config SSL buatan certbot (di dalam IfModule) & hapus semua alias.
+	ssl := "<IfModule mod_ssl.c>\n<VirtualHost *:443>\n    ServerName blog.example.com\n    ServerAlias www.blog.example.com\nSSLCertificateFile /etc/letsencrypt/live/blog.example.com/fullchain.pem\n</VirtualHost>\n</IfModule>\n"
+	out, ok = setServerAlias(ssl, "blog.example.com", nil)
+	if !ok || strings.Contains(out, "ServerAlias") || !strings.Contains(out, "</IfModule>\n") || !strings.Contains(out, "SSLCertificateFile") {
+		t.Fatalf("ssl salah (ok=%v):\n%s", ok, out)
+	}
+	if _, ok := setServerAlias(conf, "nope.example.com", []string{"www.nope.example.com"}); ok {
+		t.Error("ServerName lain harusnya tidak cocok")
+	}
+}
+
+func TestNormalizeAliases(t *testing.T) {
+	got, err := normalizeAliases("example.com", []string{" WWW.example.com ", "example.com", "www.example.com", ""})
+	if err != nil || len(got) != 1 || got[0] != "www.example.com" {
+		t.Fatalf("got %v, %v", got, err)
+	}
+	if _, err := normalizeAliases("example.com", []string{"bad host"}); err == nil {
+		t.Error("alias berspasi harusnya ditolak")
+	}
+	sites := []*SiteInfo{{Name: "a", ServerName: "a.example.com", Aliases: []string{"www.a.example.com"}}}
+	if nameConflict(sites, "", []string{"www.a.example.com"}) == nil {
+		t.Error("harusnya konflik")
+	}
+	if nameConflict(sites, "a", []string{"www.a.example.com"}) != nil {
+		t.Error("situs sendiri harusnya diabaikan")
+	}
+}
+
 func TestDocroot(t *testing.T) {
 	a := &App{cfg: defaultConfig()}
 	if _, err := a.validDocroot("/var/www/blog.example.com"); err != nil {

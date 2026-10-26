@@ -445,26 +445,14 @@ func (a *App) handleSiteCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "Domain tidak valid (contoh: blog.domainku.com)")
 		return
 	}
-	var aliases []string
-	for _, al := range req.Aliases {
-		al = strings.ToLower(strings.TrimSpace(al))
-		if al == "" || al == req.Domain {
-			continue
-		}
-		if !validDomain(al) {
-			writeErr(w, http.StatusBadRequest, "Alias tidak valid: "+al)
-			return
-		}
-		aliases = appendUnique(aliases, al)
-	}
-	if len(aliases) > 20 {
-		writeErr(w, http.StatusBadRequest, "Maksimal 20 alias")
+	aliases, err := normalizeAliases(req.Domain, req.Aliases)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	req.Aliases = aliases
 
 	var docroot, proxy string
-	var err error
 	switch req.Type {
 	case "static":
 		if req.DocumentRoot == "" {
@@ -500,14 +488,9 @@ func (a *App) handleSiteCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if sites, err := a.listSites(); err == nil {
-		names := append([]string{req.Domain}, req.Aliases...)
-		for _, st := range sites {
-			for _, n := range names {
-				if st.ServerName == n || contains(st.Aliases, n) {
-					writeErr(w, http.StatusConflict, fmt.Sprintf("%s sudah dipakai oleh situs %s", n, st.Name))
-					return
-				}
-			}
+		if err := nameConflict(sites, "", append([]string{req.Domain}, req.Aliases...)); err != nil {
+			writeErr(w, http.StatusConflict, err.Error())
+			return
 		}
 	}
 
@@ -585,6 +568,42 @@ func (a *App) handleSiteCreate(w http.ResponseWriter, r *http.Request) {
 		resp["ssl_error"] = "Situs berhasil dibuat, tapi SSL gagal: " + sslErr.Error()
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// normalizeAliases merapikan & memvalidasi daftar alias (tanpa duplikat dan
+// tanpa domain utama).
+func normalizeAliases(domain string, in []string) ([]string, error) {
+	var aliases []string
+	for _, al := range in {
+		al = strings.ToLower(strings.TrimSpace(al))
+		if al == "" || al == domain {
+			continue
+		}
+		if !validDomain(al) {
+			return nil, errors.New("Alias tidak valid: " + al)
+		}
+		aliases = appendUnique(aliases, al)
+	}
+	if len(aliases) > 20 {
+		return nil, errors.New("Maksimal 20 alias")
+	}
+	return aliases, nil
+}
+
+// nameConflict mengecek apakah salah satu nama sudah dipakai situs lain
+// (situs bernama skip diabaikan).
+func nameConflict(sites []*SiteInfo, skip string, names []string) error {
+	for _, st := range sites {
+		if st.Name == skip {
+			continue
+		}
+		for _, n := range names {
+			if st.ServerName == n || contains(st.Aliases, n) {
+				return fmt.Errorf("%s sudah dipakai oleh situs %s", n, st.Name)
+			}
+		}
+	}
+	return nil
 }
 
 func contains(list []string, v string) bool {
@@ -670,6 +689,207 @@ func (a *App) handleSiteConfigPut(w http.ResponseWriter, r *http.Request) {
 	}
 	a.audit(r, "site-config", name, nil)
 	respondOp(w, l, nil)
+}
+
+// ---- Edit alias ----
+
+// setServerAlias mengganti semua ServerAlias di blok <VirtualHost> yang
+// ServerName-nya serverName dengan satu baris berisi aliases (tepat di bawah
+// ServerName). Blok vhost lain tidak disentuh. ok=false jika tidak ada blok
+// yang cocok.
+func setServerAlias(content, serverName string, aliases []string) (out string, ok bool) {
+	lines := strings.Split(content, "\n")
+	res := make([]string, 0, len(lines)+1)
+	start := -1
+	for i, raw := range lines {
+		f := strings.Fields(raw)
+		key := ""
+		if len(f) > 0 {
+			key = strings.ToLower(f[0])
+		}
+		switch {
+		case strings.HasPrefix(key, "<virtualhost"):
+			if start >= 0 { // blok sebelumnya tidak ditutup
+				res = append(res, lines[start:i]...)
+			}
+			start = i
+			continue
+		case key == "</virtualhost>" && start >= 0:
+			block := lines[start : i+1]
+			if nb, matched := rewriteAliasBlock(block, serverName, aliases); matched {
+				block, ok = nb, true
+			}
+			res = append(res, block...)
+			start = -1
+			continue
+		}
+		if start < 0 {
+			res = append(res, raw)
+		}
+	}
+	if start >= 0 { // blok tidak ditutup — biarkan apa adanya
+		res = append(res, lines[start:]...)
+	}
+	return strings.Join(res, "\n"), ok
+}
+
+func rewriteAliasBlock(block []string, serverName string, aliases []string) ([]string, bool) {
+	nameIdx := -1
+	for i, raw := range block {
+		if f := strings.Fields(raw); len(f) > 1 && strings.EqualFold(f[0], "ServerName") && strings.EqualFold(f[1], serverName) {
+			nameIdx = i
+			break
+		}
+	}
+	if nameIdx < 0 {
+		return block, false
+	}
+	out := make([]string, 0, len(block)+1)
+	for i, raw := range block {
+		if f := strings.Fields(raw); len(f) > 0 && strings.EqualFold(f[0], "ServerAlias") {
+			continue
+		}
+		out = append(out, raw)
+		if i == nameIdx && len(aliases) > 0 {
+			indent := raw[:len(raw)-len(strings.TrimLeft(raw, " \t"))]
+			out = append(out, indent+"ServerAlias "+strings.Join(aliases, " "))
+		}
+	}
+	return out, true
+}
+
+func (a *App) handleSiteAliases(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Aliases  []string `json:"aliases"`
+		SSL      bool     `json:"ssl"`
+		Email    string   `json:"email"`
+		Redirect bool     `json:"redirect"`
+	}
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	req.Email = strings.TrimSpace(req.Email)
+	if req.Email != "" && !validEmail(req.Email) {
+		writeErr(w, http.StatusBadRequest, "Email tidak valid")
+		return
+	}
+	a.siteMu.Lock()
+	defer a.siteMu.Unlock()
+	sites, err := a.listSites()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var site *SiteInfo
+	for _, s := range sites {
+		if s.Name == r.PathValue("name") {
+			site = s
+		}
+	}
+	if site == nil || !siteNameRe.MatchString(site.Name) {
+		writeErr(w, http.StatusNotFound, "situs tidak ditemukan")
+		return
+	}
+	if !validDomain(site.ServerName) {
+		writeErr(w, http.StatusBadRequest, "Situs ini tidak punya ServerName yang valid")
+		return
+	}
+	aliases, err := normalizeAliases(site.ServerName, req.Aliases)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := nameConflict(sites, site.Name, aliases); err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	if req.SSL && !site.Enabled {
+		writeErr(w, http.StatusBadRequest, "Aktifkan situs dulu sebelum pasang SSL")
+		return
+	}
+
+	// Tulis ServerAlias ke config HTTP & SSL; simpan isi lama untuk rollback.
+	type saved struct {
+		path string
+		old  []byte
+		perm os.FileMode
+	}
+	names := []string{site.Name}
+	if site.SSLConf != "" {
+		names = append(names, site.SSLConf)
+	}
+	var plan []saved
+	var news []string
+	for _, n := range names {
+		p := a.confPath(n)
+		fi, err := os.Lstat(p)
+		if err != nil || !fi.Mode().IsRegular() {
+			writeErr(w, http.StatusNotFound, "config tidak ditemukan: "+p)
+			return
+		}
+		old, err := readLimited(p, 1<<20)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		nc, ok := setServerAlias(string(old), site.ServerName, aliases)
+		if !ok {
+			writeErr(w, http.StatusBadRequest, "Tidak menemukan <VirtualHost> dengan ServerName "+site.ServerName+" di "+p)
+			return
+		}
+		plan = append(plan, saved{p, old, fi.Mode().Perm()})
+		news = append(news, nc)
+	}
+
+	ctx, l := r.Context(), &opLog{}
+	rollback := func() {
+		for _, s := range plan {
+			_ = writeFileAtomic(s.path, s.old, s.perm)
+		}
+		l.add("Config dikembalikan ke versi sebelumnya.")
+	}
+	for i, s := range plan {
+		if err := writeFileAtomic(s.path, []byte(news[i]), s.perm); err != nil {
+			rollback()
+			respondOp(w, l, err)
+			return
+		}
+		l.add("Disimpan: %s", s.path)
+	}
+	if len(aliases) > 0 {
+		l.add("ServerAlias: %s", strings.Join(aliases, " "))
+	} else {
+		l.add("Semua alias dihapus.")
+	}
+	if site.Enabled {
+		if err := a.configTest(ctx, l); err != nil {
+			rollback()
+			a.audit(r, "site-aliases", site.Name, err)
+			respondOp(w, l, errors.New("configtest gagal, perubahan dibatalkan"))
+			return
+		}
+		if err := a.reloadApache(ctx, l); err != nil {
+			rollback()
+			_ = a.reloadApache(context.Background(), l)
+			respondOp(w, l, err)
+			return
+		}
+	} else {
+		l.add("Situs nonaktif — Apache tidak di-reload.")
+	}
+	a.audit(r, "site-aliases", site.Name, nil)
+
+	resp := map[string]any{"ok": true}
+	if req.SSL {
+		sslErr := a.runCertbot(ctx, l, append([]string{site.ServerName}, aliases...), site.ServerName, req.Email, req.Redirect)
+		a.audit(r, "site-ssl", site.Name, sslErr)
+		if sslErr != nil {
+			resp["ssl_error"] = "Alias tersimpan, tapi SSL gagal: " + sslErr.Error()
+		}
+	}
+	resp["log"] = strings.Join(l.lines, "\n")
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // ---- Aktif / nonaktif / hapus ----

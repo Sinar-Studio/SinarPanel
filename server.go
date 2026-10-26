@@ -144,6 +144,7 @@ func (a *App) routes() http.Handler {
 	api("PUT /api/sites/{name}/config", a.handleSiteConfigPut)
 	api("POST /api/sites/{name}/enable", a.handleSiteEnable)
 	api("POST /api/sites/{name}/disable", a.handleSiteDisable)
+	api("PUT /api/sites/{name}/aliases", a.handleSiteAliases)
 	api("POST /api/sites/{name}/ssl", a.handleSiteSSL)
 	api("GET /api/sites/{name}/dns", a.handleSiteDNS)
 	api("DELETE /api/sites/{name}", a.handleSiteDelete)

@@ -10,7 +10,7 @@ Panel VPS super ringan untuk server **Apache (Debian/Ubuntu)**: tambah subdomain
 | Menu | Isi |
 |---|---|
 | **Dashboard** | Info server (OS, uptime, load, RAM, disk), status Apache + tombol configtest / reload / restart, install certbot sekali klik |
-| **Situs & SSL** | Tambah subdomain (static/doc root **atau** reverse proxy ke `127.0.0.1:PORT` + WebSocket), langsung pasang SSL + redirect HTTPS, cek DNS, aktif/nonaktif, edit config vhost, hapus |
+| **Situs & SSL** | Tambah subdomain (static/doc root **atau** reverse proxy ke `127.0.0.1:PORT` + WebSocket), langsung pasang SSL + redirect HTTPS, edit alias (mis. `www.`) + perbarui SSL, cek DNS, aktif/nonaktif, edit config vhost, hapus |
 | **File Manager** | Jelajah, upload (drag & drop + progress), download (file atau folder → zip), editor teks, buat file/folder, rename/pindah, salin, chmod, extract zip/tar.gz, hapus |
 | **Keamanan** | 2FA TOTP (Google Authenticator, Authy, 2FAS, Bitwarden…) |
 
