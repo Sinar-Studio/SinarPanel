@@ -27,6 +27,7 @@ type App struct {
 	limiter  *limiter
 	totp     *totpStore
 	loginSem chan struct{}
+	updateMu sync.Mutex // serialisasi cek / jalankan update panel
 	siteMu   sync.Mutex // serialisasi operasi Apache/certbot
 	selfExe  string
 	hostname string
@@ -137,6 +138,10 @@ func (a *App) routes() http.Handler {
 	api("GET /api/system", a.handleSystem)
 	api("POST /api/apache/{action}", a.handleApacheAction)
 	api("POST /api/certbot/install", a.handleCertbotInstall)
+
+	api("GET /api/update", a.handleUpdateStatus)
+	api("POST /api/update/check", a.handleUpdateCheck)
+	api("POST /api/update/run", a.handleUpdateRun)
 
 	api("GET /api/sites", a.handleSitesList)
 	api("POST /api/sites", a.handleSiteCreate)

@@ -6,7 +6,9 @@ set -euo pipefail
 [[ $EUID -eq 0 ]] || { echo "jalankan sebagai root"; exit 1; }
 
 systemctl disable --now sinarpanel 2>/dev/null || true
-rm -f /etc/systemd/system/sinarpanel.service /usr/local/bin/sinarpanel /etc/pam.d/sinarpanel
+rm -f /etc/systemd/system/sinarpanel.service /usr/local/bin/sinarpanel /usr/local/sbin/sinarpanel-update /etc/pam.d/sinarpanel
+rm -rf /opt/sinarpanel/src
+rmdir /opt/sinarpanel 2>/dev/null || true
 systemctl daemon-reload
 
 if [[ ${1:-} == --purge ]]; then

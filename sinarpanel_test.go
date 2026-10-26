@@ -95,6 +95,16 @@ func TestNormalizeAliases(t *testing.T) {
 	}
 }
 
+func TestUpdateLogStripsColors(t *testing.T) {
+	in := "\x1b[1;33m==>\x1b[0m Menjalankan install.sh\n\x1b[1;32m✓ SinarPanel diupdate ke 031ef60\x1b[0m\n"
+	if got := ansiRe.ReplaceAllString(in, ""); got != "==> Menjalankan install.sh\n✓ SinarPanel diupdate ke 031ef60\n" {
+		t.Fatalf("got %q", got)
+	}
+	if commitRe.MatchString("031ef60") || !commitRe.MatchString("031ef6011a583ba4c46bee80f7241dd4b5ab38dc") {
+		t.Error("commitRe salah")
+	}
+}
+
 func TestDocroot(t *testing.T) {
 	a := &App{cfg: defaultConfig()}
 	if _, err := a.validDocroot("/var/www/blog.example.com"); err != nil {

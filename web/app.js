@@ -355,8 +355,8 @@
     const body = h('div', { class: 'grid' }, h('div', { class: 'muted' }, 'Memuat…'));
     put($main, pageHead('Dashboard', btn('', { icon: 'refresh', class: 'icon-only', title: 'Refresh', onclick: () => load() })), body);
     async function load() {
-      let s;
-      try { s = await api('GET', '/api/system'); } catch (e) { showErr(e); return; }
+      let s, u;
+      try { [s, u] = await Promise.all([api('GET', '/api/system'), api('GET', '/api/update').catch(() => null)]); } catch (e) { showErr(e); return; }
       const memUsed = s.mem_total - s.mem_avail;
       const disk = s.disk || { total: 0, free: 0 };
       const apacheOk = s.apache === 'active';
@@ -402,10 +402,111 @@
                 },
               })),
           h('div', { class: 'muted small' }, 'Sertifikat diperpanjang otomatis oleh timer systemd certbot.')),
+        panelCard(s, u),
       );
     }
     load();
     state.timer = setInterval(() => { if (!modalStack.length) load(); }, 15000);
+  }
+
+  // ---------- Update panel ----------
+  function panelCard(s, u) {
+    const card = h('div', { class: 'card stack' },
+      h('h3', null, 'SinarPanel'),
+      h('div', { class: 'row' }, h('strong', null, 'v' + s.panel_ver), u && u.installed ? h('code', { title: u.installed }, u.installed.slice(0, 7)) : null));
+    if (!u) return card;
+    if (u.running) {
+      put(card, h('div', { class: 'row' }, spinner(), 'Update sedang berjalan…'),
+        btn('Lihat progres', { icon: 'refresh', class: 'sm', onclick: () => updateProgress() }));
+      return card;
+    }
+    if (u.log_time) {
+      const ok = /diupdate ke|sudah versi terbaru/.test(u.log || '');
+      const result = u.state === 'failed' ? h('span', { class: 'badge danger' }, 'gagal') : ok ? h('span', { class: 'badge ok' }, 'berhasil') : null;
+      put(card, h('div', { class: 'row muted small' }, 'Update terakhir ' + fmtDay(u.log_time), result,
+        h('a', { href: '#', onclick: (e) => { e.preventDefault(); showUpdateLog(u.log); } }, 'lihat log')));
+    }
+    if (!u.updater) {
+      put(card, h('div', { class: 'muted small' }, 'Updater belum terpasang. Jalankan sekali dari SSH: ', h('code', null, 'sudo bash install.sh'), ' (versi terbaru).'));
+    } else {
+      put(card, h('div', null, btn('Cek update', { icon: 'refresh', class: 'sm', onclick: () => updateCheckModal() })));
+    }
+    return card;
+  }
+
+  function showUpdateLog(log) {
+    const m = modal({ title: 'Log update terakhir', size: 'wide', body: h('pre', { class: 'log' }, log || '(kosong)'), footer: [btn('Tutup', { class: 'primary', onclick: () => m.close() })] });
+  }
+
+  function updateCheckModal() {
+    const m = modal({ title: 'Update SinarPanel', size: 'wide', body: h('div', { class: 'row' }, spinner(), 'Mengecek versi terbaru di GitHub…') });
+    m.locked = true;
+    const close = btn('Tutup', { onclick: () => m.close() });
+    api('POST', '/api/update/check').then((res) => {
+      m.locked = false;
+      const short = res.latest.slice(0, 7);
+      if (!res.available) {
+        m.setBody(h('div', { class: 'alert info' }, '✓ Sudah versi terbaru (' + short + ', branch ' + res.branch + ').'));
+        m.setFooter(close);
+        return;
+      }
+      const list = h('ul', { class: 'commits' }, res.commits.map((c) => h('li', null,
+        h('code', null, c.hash.slice(0, 7)), ' ', c.subject,
+        h('span', { class: 'muted small' }, ' — ' + c.author + ', ' + fmtDay(c.date)))));
+      m.setBody(h('div', { class: 'stack' },
+        h('div', null, 'Versi baru tersedia (branch ', h('code', null, res.branch), '): ',
+          h('code', null, res.installed ? res.installed.slice(0, 7) : '?'), ' → ', h('code', null, short)),
+        res.installed ? null : h('div', { class: 'muted small' }, 'Commit yang terpasang tidak diketahui (install manual), jadi hanya commit terbaru yang ditampilkan.'),
+        list,
+        h('div', { class: 'alert warn' }, 'Panel akan di-build ulang lalu restart (±1–3 menit), dan kamu perlu login ulang setelahnya. Apache & situs tidak terganggu.')));
+      const go = btn('Update ke ' + short, { icon: 'download', class: 'accent' });
+      go.addEventListener('click', async () => {
+        go.disabled = true;
+        try { await api('POST', '/api/update/run'); } catch (e) { go.disabled = false; showErr(e); return; }
+        m.close();
+        updateProgress();
+      });
+      m.setFooter(btn('Batal', { onclick: () => m.close() }), go);
+    }).catch((e) => {
+      m.locked = false;
+      if (e.silent) { m.close(); return; }
+      m.setBody(h('div', { class: 'stack' }, h('div', { class: 'alert err' }, e.message), e.data && e.data.log ? h('pre', { class: 'log' }, e.data.log) : null));
+      m.setFooter(close);
+    });
+  }
+
+  // Pantau unit sinarpanel-update. Saat install.sh me-restart panel, sesi
+  // (di memori) hilang → 401 berarti panel baru sudah jalan.
+  function updateProgress() {
+    const log = h('pre', { class: 'log' });
+    const status = h('div', { class: 'row' }, spinner(), 'Update berjalan… jangan tutup halaman ini.');
+    const m = modal({ title: 'Update SinarPanel', size: 'wide', body: h('div', { class: 'stack' }, status, log) });
+    m.locked = true;
+    const finish = (kind, msg, action) => {
+      m.locked = false;
+      fill(status, h('div', { class: 'alert ' + kind }, msg));
+      m.setFooter(action || btn('Tutup', { class: 'primary', onclick: () => m.close() }));
+    };
+    const poll = async () => {
+      let res;
+      try { res = await fetch('/api/update', { credentials: 'same-origin' }); } catch (e) { res = null; }
+      if (res && res.status === 401) {
+        finish('info', '✓ Update selesai dan panel sudah direstart. Silakan login ulang.', btn('Login ulang', { class: 'primary', onclick: () => location.reload() }));
+        return;
+      }
+      if (!res || !res.ok) {
+        fill(status, spinner(), 'Panel sedang restart…');
+        setTimeout(poll, 2000);
+        return;
+      }
+      const u = await res.json().catch(() => ({}));
+      log.textContent = u.log || '';
+      log.scrollTop = log.scrollHeight;
+      if (u.running) { setTimeout(poll, 1500); return; }
+      if (u.state === 'failed') finish('err', 'Update gagal — lihat log di atas. Panel versi lama tetap berjalan.');
+      else finish('info', '✓ Update selesai.');
+    };
+    poll();
   }
 
   // ---------- Situs ----------

@@ -253,3 +253,5 @@ textarea.code {
   .site .actions { justify-content: flex-start; }
   table.files .hide-m { display: none; }
 }
+.commits { margin: 0; padding-left: 18px; max-height: 280px; overflow: auto; }
+.commits li { margin: 3px 0; overflow-wrap: anywhere; }

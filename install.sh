@@ -9,6 +9,7 @@ PORT=8443
 INSTALL_CERTBOT=1
 ASSUME_YES=0
 BIN=/usr/local/bin/sinarpanel
+UPDATER=/usr/local/sbin/sinarpanel-update
 CONF_DIR=/etc/sinarpanel
 UNIT=/etc/systemd/system/sinarpanel.service
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -207,6 +208,19 @@ systemctl restart sinarpanel
 sleep 1
 systemctl is-active --quiet sinarpanel || { journalctl -u sinarpanel -n 30 --no-pager; die "service gagal start"; }
 
+# ---------- Updater ----------
+if [[ -f $SRC_DIR/update.sh ]]; then
+  install -m 0755 -o root -g root "$SRC_DIR/update.sh" "$UPDATER.tmp"
+  mv -f "$UPDATER.tmp" "$UPDATER"
+fi
+# Catat commit yang terpasang (dipakai sinarpanel-update untuk cek versi).
+if command -v git >/dev/null && COMMIT=$(git -c safe.directory="$SRC_DIR" -C "$SRC_DIR" rev-parse HEAD 2>/dev/null); then
+  printf '%s\n' "$COMMIT" > "$CONF_DIR/installed-commit"
+  chmod 600 "$CONF_DIR/installed-commit"
+else
+  rm -f "$CONF_DIR/installed-commit"
+fi
+
 # ---------- Firewall ----------
 if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
   if ! ufw status | grep -qE "^$PORT/tcp"; then
@@ -226,6 +240,7 @@ echo "  dengan yang ditampilkan browser sebelum lanjut (klik ikon gembok → ser
 echo
 echo "  Config : $CONF_DIR/config.json   (setelah edit: systemctl restart sinarpanel)"
 echo "  Log    : journalctl -u sinarpanel -f"
+echo "  Update : sudo sinarpanel-update"
 echo
 echo "  Rekomendasi: aktifkan 2FA di menu Keamanan, lalu batasi akses port $PORT"
 echo "  ke IP kamu saja (allowed_ips di config, atau firewall)."

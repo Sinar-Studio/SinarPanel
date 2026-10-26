@@ -9,7 +9,7 @@ Panel VPS super ringan untuk server **Apache (Debian/Ubuntu)**: tambah subdomain
 
 | Menu | Isi |
 |---|---|
-| **Dashboard** | Info server (OS, uptime, load, RAM, disk), status Apache + tombol configtest / reload / restart, install certbot sekali klik |
+| **Dashboard** | Info server (OS, uptime, load, RAM, disk), status Apache + tombol configtest / reload / restart, install certbot sekali klik, update panel dari GitHub |
 | **Situs & SSL** | Tambah subdomain (static/doc root **atau** reverse proxy ke `127.0.0.1:PORT` + WebSocket), langsung pasang SSL + redirect HTTPS, edit alias (mis. `www.`) + perbarui SSL, cek DNS, aktif/nonaktif, edit config vhost, hapus |
 | **File Manager** | Jelajah, upload (drag & drop + progress), download (file atau folder → zip), editor teks, buat file/folder, rename/pindah, salin, chmod, extract zip/tar.gz, hapus |
 | **Keamanan** | 2FA TOTP (Google Authenticator, Authy, 2FAS, Bitwarden…) |
@@ -34,11 +34,29 @@ Installer akan:
 1. Install `gcc`, `libpam0g-dev` (untuk build), `apache2` & `certbot` jika belum ada.
 2. Download Go **sementara** (checksum diverifikasi), build binary, lalu menghapus toolchain-nya.
 3. Membuat `/etc/sinarpanel/config.json` (mode 600), PAM `/etc/pam.d/sinarpanel`, dan service systemd.
-4. Menampilkan URL + **fingerprint sertifikat**.
+4. Memasang perintah `sinarpanel-update` untuk update dari GitHub.
+5. Menampilkan URL + **fingerprint sertifikat**.
 
 Buka `https://IP-SERVER:8443`. Browser akan memperingatkan sertifikat self-signed — cocokkan fingerprint SHA-256 yang ditampilkan installer dengan yang ada di browser, lalu lanjutkan.
 
-**Update:** tarik versi baru ke folder yang sama, lalu jalankan `sudo bash install.sh` lagi (config tidak ditimpa).
+Atau langsung dari GitHub tanpa menyalin folder:
+
+```bash
+sudo apt-get install -y git
+sudo git clone https://github.com/Sinar-Studio/SinarPanel.git /opt/sinarpanel/src
+sudo bash /opt/sinarpanel/src/install.sh
+```
+
+**Update:** cukup jalankan
+
+```bash
+sudo sinarpanel-update           # ambil versi terbaru dari GitHub, build, restart
+sudo sinarpanel-update --check   # hanya cek ada update atau tidak
+```
+
+Atau dari panel: **Dashboard → kartu SinarPanel → Cek update**. Panel menampilkan daftar commit baru; klik **Update** untuk menjalankan updater (sebagai unit systemd `sinarpanel-update`, jadi tetap jalan saat panel restart). Progres tampil langsung, lalu login ulang setelah panel restart. Log terakhir: `/var/log/sinarpanel-update.log`.
+
+Updater menyimpan source di `/opt/sinarpanel/src`, menampilkan daftar commit baru, lalu menjalankan `install.sh -y` (config, 2FA, situs & sertifikat tidak disentuh). Opsi lain: `--force` (build ulang walau sudah terbaru), `--branch=NAMA`, `--repo=URL` (fork sendiri), `-y` (tanpa konfirmasi).
 **Uninstall:** `sudo bash uninstall.sh` (tambahkan `--purge` untuk menghapus config). Situs & sertifikat tidak disentuh.
 
 ## Login
@@ -137,6 +155,7 @@ auth.go        login PAM, sesi, rate limit, CSRF, 2FA endpoint
 pam_cgo.go     binding PAM (cgo)
 totp.go        TOTP RFC 6238
 sites.go       vhost Apache, certbot, cek DNS
+update.go      cek & jalankan update panel (sinarpanel-update)
 files.go       endpoint file manager → fs-helper
 fshelper.go    operasi file (berjalan sebagai user login)
 sysinfo.go     info dashboard
